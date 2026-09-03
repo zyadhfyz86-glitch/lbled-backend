@@ -388,7 +388,7 @@ def account(user_id: int = Depends(require_auth)):
     conn = get_db()
 
     user = conn.execute(
-        "SELECT * FROM users WHERE email = ?",
+        "SELECT * FROM users WHERE id = ?",
         (user_id,)
     ).fetchone()
 
