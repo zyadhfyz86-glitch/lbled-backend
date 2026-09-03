@@ -642,30 +642,53 @@ def business_smart_analysis(_: bool = Depends(require_owner)):
         conn.close()
         raise HTTPException(status_code=404, detail="الحساب غير موجود")
 
-    sales = conn.execute(
-        """SELECT COALESCE(SUM(amount), 0)
-           FROM transactions
-           WHERE account_id = ? AND type = 'sale'""",
-        (account["id"],)
-    ).fetchone()[0]
+    account_id = account["id"]
 
-    expenses = conn.execute(
-        """SELECT COALESCE(SUM(ABS(amount)), 0)
-           FROM transactions
-           WHERE account_id = ? AND type = 'expense'""",
-        (account["id"],)
-    ).fetchone()[0]
+    current = conn.execute(
+        """
+        SELECT
+            COALESCE(SUM(CASE WHEN type = 'sale' THEN amount ELSE 0 END), 0) AS sales,
+            COALESCE(SUM(CASE WHEN type = 'expense' THEN ABS(amount) ELSE 0 END), 0) AS expenses
+        FROM transactions
+        WHERE account_id = ?
+          AND date(created_at) >= date('now', 'start of month')
+        """,
+        (account_id,)
+    ).fetchone()
+
+    previous = conn.execute(
+        """
+        SELECT
+            COALESCE(SUM(CASE WHEN type = 'sale' THEN amount ELSE 0 END), 0) AS sales,
+            COALESCE(SUM(CASE WHEN type = 'expense' THEN ABS(amount) ELSE 0 END), 0) AS expenses
+        FROM transactions
+        WHERE account_id = ?
+          AND date(created_at) >= date('now', 'start of month', '-1 month')
+          AND date(created_at) < date('now', 'start of month')
+        """,
+        (account_id,)
+    ).fetchone()
 
     conn.close()
 
-    sales = int(sales or 0)
-    expenses = int(expenses or 0)
-    profit = sales - expenses
+    sales = int(current["sales"] or 0)
+    expenses = int(current["expenses"] or 0)
+    previous_sales = int(previous["sales"] or 0)
+    previous_expenses = int(previous["expenses"] or 0)
 
-    if sales > 0:
-        margin = (profit / sales) * 100
-    else:
-        margin = 0
+    profit = sales - expenses
+    previous_profit = previous_sales - previous_expenses
+
+    margin = (profit / sales * 100) if sales > 0 else 0
+
+    def change_percent(current_value, previous_value):
+        if previous_value == 0:
+            return 100 if current_value > 0 else 0
+        return round(((current_value - previous_value) / previous_value) * 100, 1)
+
+    sales_change = change_percent(sales, previous_sales)
+    expenses_change = change_percent(expenses, previous_expenses)
+    profit_change = change_percent(profit, previous_profit) if previous_profit != 0 else 0
 
     if sales == 0:
         evaluation = "لا توجد مبيعات كافية للتحليل"
@@ -688,6 +711,19 @@ def business_smart_analysis(_: bool = Depends(require_owner)):
         message = "المصاريف تساوي أو تتجاوز المبيعات حاليًا."
         recommendation = "راجع المصاريف وحاول رفع المبيعات قبل زيادة الإنفاق."
 
+    alerts = []
+
+    if previous_sales > 0 and sales_change <= -20:
+        alerts.append("المبيعات انخفضت بأكثر من 20% مقارنة بالشهر السابق.")
+    elif previous_sales > 0 and sales_change >= 20:
+        alerts.append("المبيعات ارتفعت بأكثر من 20% مقارنة بالشهر السابق.")
+
+    if previous_expenses > 0 and expenses_change >= 20:
+        alerts.append("المصاريف ارتفعت بأكثر من 20% مقارنة بالشهر السابق.")
+
+    if profit < 0:
+        alerts.append("النشاط يسجل خسارة حاليًا.")
+
     return {
         "ok": True,
         "sales": sales,
@@ -696,7 +732,14 @@ def business_smart_analysis(_: bool = Depends(require_owner)):
         "margin": round(margin, 1),
         "evaluation": evaluation,
         "message": message,
-        "recommendation": recommendation
+        "recommendation": recommendation,
+        "previous_sales": previous_sales,
+        "previous_expenses": previous_expenses,
+        "previous_profit": previous_profit,
+        "sales_change": sales_change,
+        "expenses_change": expenses_change,
+        "profit_change": profit_change,
+        "alerts": alerts
     }
 
 @app.get("/api/business/monthly-report")
