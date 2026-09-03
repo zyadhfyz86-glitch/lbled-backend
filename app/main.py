@@ -1,9 +1,12 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import sqlite3
 from pathlib import Path
 from datetime import datetime, timezone
+import os
+import secrets
+import hmac
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = BASE_DIR / "lbled.db"
@@ -169,6 +172,40 @@ class AddMoneyRequest(BaseModel):
     amount: int = Field(gt=0, le=1000000000)
 
 
+class OwnerLoginRequest(BaseModel):
+    key: str = Field(min_length=1, max_length=500)
+
+
+OWNER_KEY = os.getenv("LBLED_OWNER_KEY", "")
+OWNER_TOKENS = set()
+
+
+@app.post("/api/owner/login")
+def owner_login(data: OwnerLoginRequest):
+    if not OWNER_KEY:
+        raise HTTPException(status_code=503, detail="مصادقة المالك غير مهيأة")
+
+    if not hmac.compare_digest(data.key, OWNER_KEY):
+        raise HTTPException(status_code=401, detail="مفتاح المالك غير صحيح")
+
+    token = secrets.token_urlsafe(32)
+    OWNER_TOKENS.add(token)
+
+    return {"ok": True, "owner": True, "token": token}
+
+
+def require_owner(authorization: str = Header(default="")):
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="تسجيل دخول المالك مطلوب")
+
+    token = authorization[7:].strip()
+
+    if not token or token not in OWNER_TOKENS:
+        raise HTTPException(status_code=401, detail="جلسة المالك غير صالحة")
+
+    return True
+
+
 @app.get("/api/health")
 def health():
     return {
@@ -179,7 +216,7 @@ def health():
 
 
 @app.get("/api/account")
-def account():
+def account(_: bool = Depends(require_owner)):
     conn = get_db()
 
     user = conn.execute(
@@ -211,7 +248,7 @@ def account():
 
 
 @app.get("/api/transactions")
-def transactions():
+def transactions(_: bool = Depends(require_owner)):
     conn = get_db()
 
     account = conn.execute(
@@ -313,7 +350,7 @@ def add_beneficiary(data: BeneficiaryRequest):
 
 
 @app.delete("/api/beneficiaries/{beneficiary_id}")
-def delete_beneficiary(beneficiary_id: int):
+def delete_beneficiary(beneficiary_id: int, _: bool = Depends(require_owner)):
     conn = get_db()
 
     cursor = conn.execute(
@@ -337,7 +374,7 @@ def delete_beneficiary(beneficiary_id: int):
 
 
 @app.post("/api/transfer")
-def transfer(data: TransferRequest):
+def transfer(data: TransferRequest, _: bool = Depends(require_owner)):
     conn = get_db()
 
     account = conn.execute(
@@ -394,7 +431,7 @@ def transfer(data: TransferRequest):
 
 
 @app.post("/api/add-money")
-def add_money(data: AddMoneyRequest):
+def add_money(data: AddMoneyRequest, _: bool = Depends(require_owner)):
     conn = get_db()
 
     account = conn.execute(
@@ -441,7 +478,7 @@ def add_money(data: AddMoneyRequest):
 
 
 @app.get("/api/cards")
-def cards():
+def cards(_: bool = Depends(require_owner)):
     conn = get_db()
 
     rows = conn.execute(
@@ -562,7 +599,7 @@ class BusinessEntryRequest(BaseModel):
 
 
 @app.get("/api/business/summary")
-def business_summary():
+def business_summary(_: bool = Depends(require_owner)):
     conn = get_db()
     account = conn.execute(
         "SELECT id FROM accounts ORDER BY id LIMIT 1"
@@ -595,7 +632,7 @@ def business_summary():
 
 
 @app.get("/api/business/smart-analysis")
-def business_smart_analysis():
+def business_smart_analysis(_: bool = Depends(require_owner)):
     conn = get_db()
     account = conn.execute(
         "SELECT id FROM accounts ORDER BY id LIMIT 1"
@@ -663,7 +700,7 @@ def business_smart_analysis():
     }
 
 @app.get("/api/business/monthly-report")
-def business_monthly_report():
+def business_monthly_report(_: bool = Depends(require_owner)):
     conn = get_db()
     account = conn.execute(
         "SELECT id FROM accounts ORDER BY id LIMIT 1"
@@ -712,7 +749,7 @@ def business_monthly_report():
 
 
 @app.post("/api/business/sale")
-def business_sale(data: BusinessEntryRequest):
+def business_sale(data: BusinessEntryRequest, _: bool = Depends(require_owner)):
     conn = get_db()
 
     account = conn.execute(
@@ -746,7 +783,7 @@ def business_sale(data: BusinessEntryRequest):
 
 
 @app.post("/api/business/expense")
-def business_expense(data: BusinessEntryRequest):
+def business_expense(data: BusinessEntryRequest, _: bool = Depends(require_owner)):
     conn = get_db()
 
     account = conn.execute(
