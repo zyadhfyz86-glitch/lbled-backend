@@ -484,7 +484,7 @@ def add_beneficiary(data: BeneficiaryRequest, user_id: int = Depends(require_aut
            (user_id, name, account_number, bank_name, created_at)
            VALUES (?, ?, ?, ?, ?)""",
         (
-            user["id"],
+            user_id,
             data.name,
             data.account_number,
             data.bank_name,
