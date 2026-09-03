@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import os
 import secrets
 import hmac
+import hashlib
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = BASE_DIR / "lbled.db"
@@ -24,6 +25,35 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def hash_password(password):
+    salt = secrets.token_bytes(16)
+    hashed = hashlib.scrypt(
+        password.encode("utf-8"),
+        salt=salt,
+        n=16384,
+        r=8,
+        p=1,
+    )
+    return salt.hex() + ":" + hashed.hex()
+
+
+def verify_password(password, stored):
+    try:
+        salt_hex, hash_hex = stored.split(":", 1)
+        salt = bytes.fromhex(salt_hex)
+        expected = bytes.fromhex(hash_hex)
+        actual = hashlib.scrypt(
+            password.encode("utf-8"),
+            salt=salt,
+            n=16384,
+            r=8,
+            p=1,
+        )
+        return hmac.compare_digest(actual, expected)
+    except Exception:
+        return False
 
 
 def now():
@@ -44,9 +74,15 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             email TEXT UNIQUE NOT NULL,
+            password_hash TEXT,
             created_at TEXT NOT NULL
         )
     """)
+
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
+    except Exception:
+        pass
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS accounts (
@@ -178,6 +214,58 @@ class OwnerLoginRequest(BaseModel):
 
 OWNER_KEY = os.getenv("LBLED_OWNER_KEY", "")
 OWNER_TOKENS = set()
+
+
+class RegisterRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=80)
+    email: str = Field(min_length=5, max_length=160)
+    password: str = Field(min_length=6, max_length=128)
+
+
+@app.post("/api/auth/register")
+def register(data: RegisterRequest):
+    name = data.name.strip()
+    email = data.email.strip().lower()
+
+    if not name or not email:
+        raise HTTPException(status_code=400, detail="الاسم والبريد مطلوبان")
+
+    conn = get_db()
+
+    existing = conn.execute(
+        "SELECT id FROM users WHERE email = ? LIMIT 1",
+        (email,)
+    ).fetchone()
+
+    if existing:
+        conn.close()
+        raise HTTPException(status_code=409, detail="البريد الإلكتروني مستخدم بالفعل")
+
+    created_at = now()
+
+    cursor = conn.execute(
+        "INSERT INTO users (name, email, password_hash, created_at) VALUES (?, ?, ?, ?)",
+        (name, email, hash_password(data.password), created_at)
+    )
+    user_id = cursor.lastrowid
+
+    conn.execute(
+        "INSERT INTO accounts (user_id, currency, balance, created_at) VALUES (?, 'DZD', 0, ?)",
+        (user_id, created_at)
+    )
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "ok": True,
+        "message": "تم إنشاء الحساب بنجاح",
+        "user": {
+            "id": user_id,
+            "name": name,
+            "email": email
+        }
+    }
 
 
 @app.post("/api/owner/login")
