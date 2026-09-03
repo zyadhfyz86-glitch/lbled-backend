@@ -566,6 +566,31 @@ def pro_interest():
     }
 
 
+@app.get("/api/pro/interested")
+def pro_interested(_: bool = Depends(require_owner)):
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT p.id, p.user_id, u.email, p.created_at
+        FROM pro_interest p
+        LEFT JOIN users u ON u.id = p.user_id
+        ORDER BY p.id DESC
+    """).fetchall()
+    conn.close()
+
+    return {
+        "ok": True,
+        "interested_users": [
+            {
+                "id": row["id"],
+                "user_id": row["user_id"],
+                "email": row["email"],
+                "created_at": row["created_at"]
+            }
+            for row in rows
+        ]
+    }
+
+
 @app.get("/api/pro/stats")
 def pro_stats():
     conn = get_db()
