@@ -214,6 +214,7 @@ class OwnerLoginRequest(BaseModel):
 
 OWNER_KEY = os.getenv("LBLED_OWNER_KEY", "")
 OWNER_TOKENS = set()
+USER_TOKENS = {}
 
 
 class RegisterRequest(BaseModel):
@@ -257,13 +258,54 @@ def register(data: RegisterRequest):
     conn.commit()
     conn.close()
 
+    token = secrets.token_urlsafe(32)
+    USER_TOKENS[token] = user_id
+
     return {
         "ok": True,
         "message": "تم إنشاء الحساب بنجاح",
+        "token": token,
         "user": {
             "id": user_id,
             "name": name,
             "email": email
+        }
+    }
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(min_length=5, max_length=160)
+    password: str = Field(min_length=6, max_length=128)
+
+
+@app.post("/api/auth/login")
+def user_login(data: LoginRequest):
+    email = data.email.strip().lower()
+
+    conn = get_db()
+    user = conn.execute(
+        "SELECT id, name, email, password_hash FROM users WHERE email = ? LIMIT 1",
+        (email,)
+    ).fetchone()
+    conn.close()
+
+    if not user or not verify_password(data.password, user["password_hash"]):
+        raise HTTPException(
+            status_code=401,
+            detail="البريد الإلكتروني أو كلمة المرور غير صحيحة"
+        )
+
+    token = secrets.token_urlsafe(32)
+    USER_TOKENS[token] = user["id"]
+
+    return {
+        "ok": True,
+        "message": "تم تسجيل الدخول بنجاح",
+        "token": token,
+        "user": {
+            "id": user["id"],
+            "name": user["name"],
+            "email": user["email"]
         }
     }
 
@@ -280,6 +322,44 @@ def owner_login(data: OwnerLoginRequest):
     OWNER_TOKENS.add(token)
 
     return {"ok": True, "owner": True, "token": token}
+
+
+def require_user(authorization: str = Header(default="")):
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="تسجيل الدخول مطلوب")
+
+    token = authorization[7:].strip()
+    user_id = USER_TOKENS.get(token)
+
+    if not user_id:
+        raise HTTPException(status_code=401, detail="جلسة المستخدم غير صالحة")
+
+    return user_id
+
+
+def require_auth(authorization: str = Header(default="")):
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="تسجيل الدخول مطلوب")
+
+    token = authorization[7:].strip()
+
+    user_id = USER_TOKENS.get(token)
+
+    if user_id:
+        return user_id
+
+    if token in OWNER_TOKENS:
+        conn = get_db()
+        user = conn.execute(
+            "SELECT id FROM users WHERE email = ? LIMIT 1",
+            ("demo@lbled.local",)
+        ).fetchone()
+        conn.close()
+
+        if user:
+            return user["id"]
+
+    raise HTTPException(status_code=401, detail="جلسة الدخول غير صالحة")
 
 
 def require_owner(authorization: str = Header(default="")):
@@ -304,12 +384,12 @@ def health():
 
 
 @app.get("/api/account")
-def account(_: bool = Depends(require_owner)):
+def account(user_id: int = Depends(require_auth)):
     conn = get_db()
 
     user = conn.execute(
         "SELECT * FROM users WHERE email = ?",
-        ("demo@lbled.local",)
+        (user_id,)
     ).fetchone()
 
     account = conn.execute(
@@ -336,11 +416,12 @@ def account(_: bool = Depends(require_owner)):
 
 
 @app.get("/api/transactions")
-def transactions(_: bool = Depends(require_owner)):
+def transactions(user_id: int = Depends(require_auth)):
     conn = get_db()
 
     account = conn.execute(
-        "SELECT id FROM accounts ORDER BY id LIMIT 1"
+        "SELECT id FROM accounts WHERE user_id = ? ORDER BY id LIMIT 1",
+        (user_id,)
     ).fetchone()
 
     rows = conn.execute(
@@ -361,20 +442,15 @@ def transactions(_: bool = Depends(require_owner)):
 
 
 @app.get("/api/beneficiaries")
-def get_beneficiaries():
+def get_beneficiaries(user_id: int = Depends(require_auth)):
     conn = get_db()
-
-    user = conn.execute(
-        "SELECT id FROM users WHERE email = ?",
-        ("demo@lbled.local",)
-    ).fetchone()
 
     rows = conn.execute(
         """SELECT id, name, account_number, bank_name, created_at
            FROM beneficiaries
            WHERE user_id = ?
            ORDER BY id DESC""",
-        (user["id"],)
+        (user_id,)
     ).fetchall()
 
     conn.close()
@@ -386,18 +462,14 @@ def get_beneficiaries():
 
 
 @app.post("/api/beneficiaries")
-def add_beneficiary(data: BeneficiaryRequest):
+def add_beneficiary(data: BeneficiaryRequest, user_id: int = Depends(require_auth)):
     conn = get_db()
 
-    user = conn.execute(
-        "SELECT id FROM users WHERE email = ?",
-        ("demo@lbled.local",)
-    ).fetchone()
 
     existing = conn.execute(
         """SELECT id FROM beneficiaries
            WHERE user_id = ? AND account_number = ?""",
-        (user["id"], data.account_number)
+        (user_id, data.account_number)
     ).fetchone()
 
     if existing:
