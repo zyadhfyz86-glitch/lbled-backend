@@ -534,11 +534,12 @@ def delete_beneficiary(beneficiary_id: int, _: bool = Depends(require_owner)):
 
 
 @app.post("/api/transfer")
-def transfer(data: TransferRequest, _: bool = Depends(require_owner)):
+def transfer(data: TransferRequest, user_id: int = Depends(require_auth)):
     conn = get_db()
 
     account = conn.execute(
-        "SELECT id, balance FROM accounts ORDER BY id LIMIT 1"
+        "SELECT id, balance FROM accounts WHERE user_id = ? ORDER BY id LIMIT 1",
+        (user_id,)
     ).fetchone()
 
     if account is None:
