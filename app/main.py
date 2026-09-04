@@ -638,13 +638,15 @@ def add_money(data: AddMoneyRequest, _: bool = Depends(require_owner)):
 
 
 @app.get("/api/cards")
-def cards(_: bool = Depends(require_owner)):
+def cards(user_id: int = Depends(require_auth)):
     conn = get_db()
 
     rows = conn.execute(
         """SELECT id, last4, status, card_type, cardholder, expiry, created_at
            FROM cards
-           ORDER BY id DESC"""
+           WHERE user_id = ?
+           ORDER BY id DESC""",
+        (user_id,)
     ).fetchall()
 
     conn.close()
