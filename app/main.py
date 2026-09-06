@@ -148,6 +148,22 @@ def init_db():
     """)
 
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS subscriptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            plan TEXT NOT NULL DEFAULT 'monthly',
+            amount INTEGER NOT NULL DEFAULT 1000,
+            status TEXT NOT NULL DEFAULT 'pending',
+            payment_method TEXT NOT NULL DEFAULT 'ccp',
+            payment_proof TEXT NOT NULL DEFAULT '',
+            started_at TEXT DEFAULT '',
+            expires_at TEXT DEFAULT '',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+    """)
+
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS cards (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
@@ -705,6 +721,51 @@ def toggle_card_freeze(card_id: int):
     }
 
 
+
+
+@app.post("/api/subscription/request")
+def subscription_request(user_id: int = Depends(require_user)):
+    conn = get_db()
+
+    existing = conn.execute("""
+        SELECT id, status
+        FROM subscriptions
+        WHERE user_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+    """, (user_id,)).fetchone()
+
+    if existing and existing["status"] in ("pending", "active"):
+        conn.close()
+        return {
+            "ok": True,
+            "subscription_id": existing["id"],
+            "status": existing["status"],
+            "amount": 1000,
+            "message": "لديك طلب اشتراك قائم بالفعل"
+        }
+
+    conn.execute("""
+        INSERT INTO subscriptions
+        (user_id, plan, amount, status, payment_method, created_at)
+        VALUES (?, 'monthly', 1000, 'pending', 'ccp', ?)
+    """, (user_id, now()))
+
+    subscription_id = conn.execute(
+        "SELECT last_insert_rowid()"
+    ).fetchone()[0]
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "ok": True,
+        "subscription_id": subscription_id,
+        "status": "pending",
+        "amount": 1000,
+        "payment_method": "ccp",
+        "message": "تم إنشاء طلب الاشتراك. يرجى إتمام الدفع ثم إرسال إثبات الدفع."
+    }
 
 
 @app.post("/api/pro/interest")
