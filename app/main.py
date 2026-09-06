@@ -1064,6 +1064,31 @@ def business_smart_analysis(user_id: int = Depends(require_auth)):
 
     alerts = []
 
+    # توصيات ذكية إضافية حسب سلوك النشاط
+    smart_tips = []
+
+    if sales > 0:
+        if expenses > sales * 0.8:
+            smart_tips.append("المصاريف تستهلك جزءًا كبيرًا من المبيعات؛ راجع المصاريف غير الضرورية.")
+        if sales_change >= 20:
+            smart_tips.append("المبيعات في تحسن واضح؛ استغل هذا النمو وحافظ على العملاء الحاليين.")
+        elif sales_change <= -20:
+            smart_tips.append("المبيعات في تراجع؛ راجع أكثر المنتجات أو الخدمات طلبًا وحاول تنشيط المبيعات.")
+        if expenses_change >= 20:
+            smart_tips.append("المصاريف ارتفعت بسرعة؛ حدّد مصدر الزيادة قبل اتخاذ مصاريف جديدة.")
+        if margin >= 30:
+            smart_tips.append("هامش الربح قوي؛ يمكنك التركيز على زيادة حجم المبيعات مع الحفاظ على نفس الكفاءة.")
+        elif 0 < margin < 15:
+            smart_tips.append("هامش الربح منخفض؛ تحسين المصاريف قد يكون أسرع طريق لرفع الربح.")
+    else:
+        smart_tips.append("سجّل أول عملية بيع حتى يبدأ lbléd في تحليل نشاطك.")
+
+    if profit < 0:
+        smart_tips.append("الأولوية الآن هي إيقاف الخسارة ومراجعة أكبر بنود المصاريف.")
+
+    if not smart_tips:
+        smart_tips.append("استمر في تسجيل عملياتك بانتظام ليصبح تحليل lbléd أدق.")
+
     if previous_sales > 0 and sales_change <= -20:
         alerts.append("المبيعات انخفضت بأكثر من 20% مقارنة بالشهر السابق.")
     elif previous_sales > 0 and sales_change >= 20:
@@ -1090,7 +1115,9 @@ def business_smart_analysis(user_id: int = Depends(require_auth)):
         "sales_change": sales_change,
         "expenses_change": expenses_change,
         "profit_change": profit_change,
-        "alerts": alerts
+        "alerts": alerts,
+        "smart_tips": smart_tips,
+        "ai_mode": "local"
     }
 
 @app.get("/api/business/monthly-report")
