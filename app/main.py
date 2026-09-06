@@ -768,6 +768,18 @@ def subscription_request(user_id: int = Depends(require_user)):
     }
 
 
+@app.get("/api/subscription/payment-info")
+def subscription_payment_info(user_id: int = Depends(require_user)):
+    return {
+        "ok": True,
+        "amount": 1000,
+        "currency": "DZD",
+        "payment_method": "CCP",
+        "ccp": os.getenv("LBLED_CCP", ""),
+        "status": "pending"
+    }
+
+
 @app.post("/api/pro/interest")
 def pro_interest(user_id: int = Depends(require_user)):
     conn = get_db()
