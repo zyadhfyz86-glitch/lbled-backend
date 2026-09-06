@@ -110,6 +110,23 @@ def init_db():
     """)
 
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS payment_orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            account_id INTEGER NOT NULL,
+            provider TEXT NOT NULL,
+            external_id TEXT DEFAULT '',
+            amount INTEGER NOT NULL,
+            currency TEXT NOT NULL DEFAULT 'DZD',
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id),
+            FOREIGN KEY(account_id) REFERENCES accounts(id)
+        )
+    """)
+
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS beneficiaries (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
