@@ -780,6 +780,25 @@ def subscription_payment_info(user_id: int = Depends(require_user)):
     }
 
 
+@app.post("/api/subscription/paid")
+def subscription_paid(user_id: int = Depends(require_user)):
+    conn = get_db()
+    row = conn.execute("""
+        SELECT id FROM subscriptions
+        WHERE user_id = ? AND status = 'pending'
+        ORDER BY id DESC LIMIT 1
+    """, (user_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="لا يوجد طلب اشتراك قيد الانتظار")
+    conn.execute(
+        "UPDATE subscriptions SET status='payment_review' WHERE id=?",
+        (row["id"],)
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "status": "payment_review", "message": "تم إرسال الدفع للمراجعة"}
+
 @app.post("/api/pro/interest")
 def pro_interest(user_id: int = Depends(require_user)):
     conn = get_db()
