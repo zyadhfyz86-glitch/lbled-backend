@@ -5,6 +5,8 @@ import sqlite3
 from pathlib import Path
 from datetime import datetime, timezone
 import os
+from dotenv import load_dotenv
+load_dotenv()
 import secrets
 import hmac
 import hashlib
@@ -862,6 +864,56 @@ def pro_interested(_: bool = Depends(require_owner)):
         ]
     }
 
+
+@app.post("/api/subscriptions/{subscription_id}/approve")
+def approve_subscription(subscription_id: int, _: bool = Depends(require_owner)):
+    from datetime import timedelta
+    conn = get_db()
+    row = conn.execute(
+        "SELECT id, status FROM subscriptions WHERE id = ? LIMIT 1",
+        (subscription_id,)
+    ).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="الاشتراك غير موجود")
+    if row["status"] == "active":
+        conn.close()
+        return {"ok": True, "status": "active", "message": "الاشتراك مفعّل بالفعل"}
+
+    started = now()
+    expires = (datetime.fromisoformat(started) + timedelta(days=30)).isoformat()
+    conn.execute("""
+        UPDATE subscriptions
+        SET status='active', started_at=?, expires_at=?
+        WHERE id=?
+    """, (started, expires, subscription_id))
+    conn.commit()
+    conn.close()
+    return {
+        "ok": True,
+        "subscription_id": subscription_id,
+        "status": "active",
+        "started_at": started,
+        "expires_at": expires,
+        "message": "تم تفعيل الاشتراك لمدة 30 يومًا"
+    }
+
+@app.get("/api/subscriptions")
+def subscriptions(_: bool = Depends(require_owner)):
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT s.id, s.user_id, u.name, u.email, s.amount,
+               s.status, s.payment_method, s.payment_proof,
+               s.created_at, s.started_at, s.expires_at
+        FROM subscriptions s
+        LEFT JOIN users u ON u.id = s.user_id
+        ORDER BY s.id DESC
+    """).fetchall()
+    conn.close()
+    return {
+        "ok": True,
+        "subscriptions": [dict(row) for row in rows]
+    }
 
 @app.get("/api/pro/stats")
 def pro_stats():
