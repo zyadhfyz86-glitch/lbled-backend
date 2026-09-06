@@ -708,12 +708,12 @@ def toggle_card_freeze(card_id: int):
 
 
 @app.post("/api/pro/interest")
-def pro_interest():
+def pro_interest(user_id: int = Depends(require_user)):
     conn = get_db()
 
     user = conn.execute(
-        "SELECT id FROM users WHERE email = ?",
-        ("demo@lbled.local",)
+        "SELECT id FROM users WHERE id = ?",
+        (user_id,)
     ).fetchone()
 
     if user is None:
@@ -804,10 +804,11 @@ class BusinessEntryRequest(BaseModel):
 
 
 @app.get("/api/business/summary")
-def business_summary(_: bool = Depends(require_owner)):
+def business_summary(user_id: int = Depends(require_auth)):
     conn = get_db()
     account = conn.execute(
-        "SELECT id FROM accounts ORDER BY id LIMIT 1"
+        "SELECT id FROM accounts WHERE user_id = ? ORDER BY id LIMIT 1",
+        (user_id,)
     ).fetchone()
 
     if account is None:
@@ -837,10 +838,11 @@ def business_summary(_: bool = Depends(require_owner)):
 
 
 @app.get("/api/business/smart-analysis")
-def business_smart_analysis(_: bool = Depends(require_owner)):
+def business_smart_analysis(user_id: int = Depends(require_auth)):
     conn = get_db()
     account = conn.execute(
-        "SELECT id FROM accounts ORDER BY id LIMIT 1"
+        "SELECT id FROM accounts WHERE user_id = ? ORDER BY id LIMIT 1",
+        (user_id,)
     ).fetchone()
 
     if account is None:
@@ -948,10 +950,11 @@ def business_smart_analysis(_: bool = Depends(require_owner)):
     }
 
 @app.get("/api/business/monthly-report")
-def business_monthly_report(_: bool = Depends(require_owner)):
+def business_monthly_report(user_id: int = Depends(require_auth)):
     conn = get_db()
     account = conn.execute(
-        "SELECT id FROM accounts ORDER BY id LIMIT 1"
+        "SELECT id FROM accounts WHERE user_id = ? ORDER BY id LIMIT 1",
+        (user_id,)
     ).fetchone()
 
     if account is None:
@@ -997,11 +1000,12 @@ def business_monthly_report(_: bool = Depends(require_owner)):
 
 
 @app.post("/api/business/sale")
-def business_sale(data: BusinessEntryRequest, _: bool = Depends(require_owner)):
+def business_sale(data: BusinessEntryRequest, user_id: int = Depends(require_auth)):
     conn = get_db()
 
     account = conn.execute(
-        "SELECT id FROM accounts ORDER BY id LIMIT 1"
+        "SELECT id FROM accounts WHERE user_id = ? ORDER BY id LIMIT 1",
+        (user_id,)
     ).fetchone()
 
     if account is None:
@@ -1031,11 +1035,12 @@ def business_sale(data: BusinessEntryRequest, _: bool = Depends(require_owner)):
 
 
 @app.post("/api/business/expense")
-def business_expense(data: BusinessEntryRequest, _: bool = Depends(require_owner)):
+def business_expense(data: BusinessEntryRequest, user_id: int = Depends(require_auth)):
     conn = get_db()
 
     account = conn.execute(
-        "SELECT id, balance FROM accounts ORDER BY id LIMIT 1"
+        "SELECT id, balance FROM accounts WHERE user_id = ? ORDER BY id LIMIT 1",
+        (user_id,)
     ).fetchone()
 
     if account is None:
