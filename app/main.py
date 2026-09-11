@@ -778,6 +778,7 @@ def subscription_payment_info(user_id: int = Depends(require_user)):
         "currency": "DZD",
         "payment_method": "CCP",
         "ccp": os.getenv("LBLED_CCP", ""),
+        "cle": os.getenv("LBLED_CLE", ""),
         "status": "pending"
     }
 
