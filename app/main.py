@@ -2,6 +2,8 @@ from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import sqlite3
+import pg8000
+from urllib.parse import urlparse
 from pathlib import Path
 from datetime import datetime, timezone
 import os
@@ -62,10 +64,78 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+class PGRow(dict):
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return list(self.values())[key]
+        return super().__getitem__(key)
+
+
+class PGCursor:
+    def __init__(self, cursor):
+        self.cursor = cursor
+
+    @property
+    def lastrowid(self):
+        try:
+            return self.cursor.lastrowid
+        except Exception:
+            return None
+
+    def fetchone(self):
+        row = self.cursor.fetchone()
+        if row is None:
+            return None
+        return PGRow(zip([d[0] for d in self.cursor.description], row))
+
+    def fetchall(self):
+        rows = self.cursor.fetchall()
+        if not self.cursor.description:
+            return rows
+        names = [d[0] for d in self.cursor.description]
+        return [PGRow(zip(names, row)) for row in rows]
+
+
+class SQLiteConnection:
+    def __init__(self):
+        self.conn = sqlite3.connect(DB_PATH)
+        self.conn.row_factory = sqlite3.Row
+    def execute(self, sql, params=()):
+        return self.conn.execute(sql, params)
+    def commit(self):
+        self.conn.commit()
+    def close(self):
+        self.conn.close()
+
+
+class PGConnection:
+    def __init__(self):
+        url = urlparse(os.getenv("DATABASE_URL", ""))
+        self.conn = pg8000.connect(
+            user=url.username,
+            password=url.password,
+            host=url.hostname,
+            port=url.port or 5432,
+            database=url.path.lstrip("/"),
+        )
+
+    def execute(self, sql, params=()):
+        sql = sql.replace("?", "%s")
+        cursor = self.conn.cursor()
+        cursor.execute(sql, params)
+        return PGCursor(cursor)
+
+    def commit(self):
+        self.conn.commit()
+
+    def close(self):
+        self.conn.close()
+
+
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    if os.getenv("DATABASE_URL"):
+        return PGConnection()
+    return SQLiteConnection()
 
 
 def init_db():
@@ -96,6 +166,14 @@ def init_db():
             FOREIGN KEY(user_id) REFERENCES users(id)
         )
     """)
+
+    if os.getenv("DATABASE_URL"):
+        try:
+            conn.execute("CREATE SEQUENCE IF NOT EXISTS accounts_id_seq")
+            conn.execute("SELECT setval('accounts_id_seq', COALESCE((SELECT MAX(id) FROM accounts),0)+1, false)")
+            conn.execute("ALTER TABLE accounts ALTER COLUMN id SET DEFAULT nextval('accounts_id_seq')")
+        except Exception:
+            pass
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS transactions (
@@ -186,8 +264,8 @@ def init_db():
 
     if user is None:
         cursor = conn.execute(
-            "INSERT INTO users (name, email, created_at) VALUES (?, ?, ?)",
-            ("حفيظ زياد", "demo@lbled.local", now())
+            "INSERT INTO users (name, email, password_hash, created_at) VALUES (?, ?, ?, ?)",
+            ("حفيظ زياد", "demo@lbled.local", hash_password(os.environ["LBLED_DEMO_PASSWORD"]), now())
         )
         user_id = cursor.lastrowid
 
@@ -224,7 +302,7 @@ def init_db():
     conn.close()
 
 
-init_db()
+# init_db() disabled: Supabase schema already exists
 
 
 class BeneficiaryRequest(BaseModel):
@@ -279,11 +357,10 @@ def register(data: RegisterRequest):
 
     created_at = now()
 
-    cursor = conn.execute(
-        "INSERT INTO users (name, email, password_hash, created_at) VALUES (?, ?, ?, ?)",
+    user_id = conn.execute(
+        "INSERT INTO users (name, email, password_hash, created_at) VALUES (?, ?, ?, ?) RETURNING id",
         (name, email, hash_password(data.password), created_at)
-    )
-    user_id = cursor.lastrowid
+    ).fetchone()[0]
 
     conn.execute(
         "INSERT INTO accounts (user_id, currency, balance, created_at) VALUES (?, 'DZD', 0, ?)",
@@ -514,10 +591,11 @@ def add_beneficiary(data: BeneficiaryRequest, user_id: int = Depends(require_aut
             detail="هذا المستفيد موجود مسبقًا"
         )
 
-    cursor = conn.execute(
+    beneficiary = conn.execute(
         """INSERT INTO beneficiaries
            (user_id, name, account_number, bank_name, created_at)
-           VALUES (?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?)
+           RETURNING id, name, account_number, bank_name, created_at""",
         (
             user_id,
             data.name,
@@ -525,15 +603,9 @@ def add_beneficiary(data: BeneficiaryRequest, user_id: int = Depends(require_aut
             data.bank_name,
             now()
         )
-    )
+    ).fetchone()
 
     conn.commit()
-
-    beneficiary = conn.execute(
-        """SELECT id, name, account_number, bank_name, created_at
-           FROM beneficiaries WHERE id = ?""",
-        (cursor.lastrowid,)
-    ).fetchone()
 
     conn.close()
 
@@ -598,10 +670,11 @@ def transfer(data: TransferRequest, user_id: int = Depends(require_auth)):
         (new_balance, account["id"])
     )
 
-    cursor = conn.execute(
+    transaction_id = conn.execute(
         """INSERT INTO transactions
            (account_id, type, title, amount, note, recipient, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           RETURNING id""",
         (
             account["id"],
             "transfer",
@@ -611,9 +684,7 @@ def transfer(data: TransferRequest, user_id: int = Depends(require_auth)):
             data.recipient,
             now()
         )
-    )
-
-    transaction_id = cursor.lastrowid
+    ).fetchone()[0]
 
     conn.commit()
     conn.close()
@@ -747,15 +818,12 @@ def subscription_request(user_id: int = Depends(require_user)):
             "message": "لديك طلب اشتراك قائم بالفعل"
         }
 
-    conn.execute("""
+    subscription_id = conn.execute("""
         INSERT INTO subscriptions
         (user_id, plan, amount, status, payment_method, created_at)
         VALUES (?, 'monthly', 1000, 'pending', 'ccp', ?)
-    """, (user_id, now()))
-
-    subscription_id = conn.execute(
-        "SELECT last_insert_rowid()"
-    ).fetchone()[0]
+        RETURNING id
+    """, (user_id, now())).fetchone()[0]
 
     conn.commit()
     conn.close()
